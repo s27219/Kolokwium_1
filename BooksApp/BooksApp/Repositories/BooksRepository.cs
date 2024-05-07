@@ -27,18 +27,6 @@ public class BooksRepository : IBooksRepository
 
 	    BookDto bookDto = null;
 	    
-    /*public class BookDto
-    {
-	    public int Id { get; set; }
-	    public string Title { get; set; } = string.Empty;
-	    public List<AuthorDTO> Authors { get; set; } = null!;
-    }
-
-    public class AuthorDTO
-    {
-	    public string FirstName { get; set; } = string.Empty;
-	    public string LastName { get; set; } = string.Empty;
-    }*/
 
 	    while (await reader.ReadAsync())
 	    {
@@ -68,69 +56,71 @@ public class BooksRepository : IBooksRepository
 	    return bookDto;
     }
     
-    /*public async Task<AnimalDto> GetAnimal(int id)
+    public async Task<bool> DoesBookExist(int id)
     {
-	    var query = @"
-        SELECT 
-            Animal.ID AS AnimalID,
-            Animal.Name AS AnimalName,
-            Type,
-            AdmissionDate,
-            Owner.ID as OwnerID,
-            FirstName,
-            LastName,
-            Procedure_Animal.Date,
-            [Procedure].Name AS ProcedureName,
-            [Procedure].Description
-        FROM Animal
-        JOIN Owner ON Owner.ID = Animal.Owner_ID
-        LEFT JOIN Procedure_Animal ON Procedure_Animal.Animal_ID = Animal.ID
-        LEFT JOIN [Procedure] ON [Procedure].ID = Procedure_Animal.Procedure_ID
-        WHERE Animal.ID = @ID";
+	    var query = "SELECT 1 FROM books WHERE PK = @ID";
 
 	    await using SqlConnection connection = new SqlConnection(_configuration.GetConnectionString("Default"));
-	    await using SqlCommand command = new SqlCommand(query, connection);
+	    await using SqlCommand command = new SqlCommand();
+
+	    command.Connection = connection;
+	    command.CommandText = query;
 	    command.Parameters.AddWithValue("@ID", id);
 
 	    await connection.OpenAsync();
-	    var reader = await command.ExecuteReaderAsync();
 
-	    AnimalDto animalDto = null;
+	    var res = await command.ExecuteScalarAsync();
 
-	    while (await reader.ReadAsync())
+	    return res is not null;
+    }
+
+    public async Task AddBookWithAuthors(BookDto bookDto)
+    {
+	    var insert = @"INSERT INTO books VALUES(@Title);
+					   SELECT @@IDENTITY AS ID;";
+	    
+	    await using SqlConnection connection = new SqlConnection(_configuration.GetConnectionString("Default"));
+	    await using SqlCommand command = new SqlCommand();
+	    
+	    command.Connection = connection;
+	    command.CommandText = insert;
+	    
+	    command.Parameters.AddWithValue("@Title", bookDto.Title);
+
+	    await connection.OpenAsync();
+	    
+	    var transaction = await connection.BeginTransactionAsync();
+	    command.Transaction = transaction as SqlTransaction;
+	    
+	    try
 	    {
-		    if (animalDto == null)
+		    var id = await command.ExecuteScalarAsync();
+    
+		    foreach (var procedure in bookDto.Authors)
 		    {
-			    animalDto = new AnimalDto
-			    {
-				    Id = reader.GetInt32(reader.GetOrdinal("AnimalID")),
-				    Name = reader.GetString(reader.GetOrdinal("AnimalName")),
-				    Type = reader.GetString(reader.GetOrdinal("Type")),
-				    AdmissionDate = reader.GetDateTime(reader.GetOrdinal("AdmissionDate")),
-				    Owner = new OwnerDto
-				    {
-					    Id = reader.GetInt32(reader.GetOrdinal("OwnerID")),
-					    FirstName = reader.GetString(reader.GetOrdinal("FirstName")),
-					    LastName = reader.GetString(reader.GetOrdinal("LastName"))
-				    },
-				    Procedures = new List<ProcedureDto>()
-			    };
+			    command.Parameters.Clear();
+			    command.CommandText = "INSERT INTO authors VALUES(@FirstName, @LastName) SELECT @@IDENTITY AS ID";
+			    command.Parameters.AddWithValue("@FirstName", procedure.FirstName);
+			    command.Parameters.AddWithValue("@LastName", procedure.LastName);
+
+			    var bookId = await command.ExecuteScalarAsync();
+			    
+			    command.Parameters.Clear();
+			    command.CommandText = "INSERT INTO books_authors VALUES(@id, @LastName)";
+			    command.Parameters.AddWithValue("@id", id);
+			    command.Parameters.AddWithValue("@bookId", bookId);
+
+			    await command.ExecuteNonQueryAsync();
 		    }
 
-		    if (!reader.IsDBNull(reader.GetOrdinal("ProcedureName")))
-		    {
-			    animalDto.Procedures.Add(new ProcedureDto
-			    {
-				    Date = reader.GetDateTime(reader.GetOrdinal("Date")),
-				    Name = reader.GetString(reader.GetOrdinal("ProcedureName")),
-				    Description = reader.GetString(reader.GetOrdinal("Description"))
-			    });
-		    }
+		    await transaction.CommitAsync();
 	    }
-
-	    if (animalDto == null)
-		    throw new KeyNotFoundException($"No animal found with ID {id}.");
-
-	    return animalDto;
-    }*/
+	    catch (Exception)
+	    {
+		    await transaction.RollbackAsync();
+		    throw;
+	    }
+	    
+	    throw new NotImplementedException();
+    }
 }
